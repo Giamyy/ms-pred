@@ -149,6 +149,20 @@ data/spec_datasets/msg/
     └── cands_df_test_mass_256.tsv
 ```
 
+If you do not have `spec_files.hdf5`, build it from the public MassSpecGym table
+(one SIRIUS-style `.ms` string per spectrum, keyed by `{identifier}.ms`):
+
+```shell
+python data_scripts/create_msg_spec_files.py \
+  --source-table https://huggingface.co/datasets/roman-bushuiev/MassSpecGym/resolve/main/data/MassSpecGym1.5.tsv \
+  --output data/spec_datasets/msg/spec_files.hdf5 \
+  --audit-out data/spec_datasets/msg/spec_files_audit.json
+```
+
+Spectra without a collision energy are stored under `>collision nan`; pass
+`--missing-ce skip` to drop them, or `--labels data/spec_datasets/msg/labels.tsv`
+to write only the spectra listed in a labels file.
+
 Then run:
 
 ```shell
