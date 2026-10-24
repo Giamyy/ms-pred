@@ -130,6 +130,30 @@ We support two MassSpecGym processing settings for ICEBERG:
 2. `msg_all`: a streamlined ICEBERG workflow for using all MassSpecGym entries
    in the main retrieval benchmark.
 
+#### Rebuilding the MassSpecGym data from scratch
+
+All MassSpecGym dataset folders can be regenerated from the public
+[Hugging Face release](https://huggingface.co/datasets/roman-bushuiev/MassSpecGym)
+with one command (downloads are cached in `data/raw/massspecgym`):
+
+```shell
+workers=32 bash data_scripts/build_msg_datasets.sh
+```
+
+This runs `data_scripts/create_msg_dataset.py` to write `labels.tsv`,
+`splits/split.tsv`, `spec_files.hdf5` and the official 256-candidate retrieval
+tables (`retrieval/cands_df_test_{formula,mass}_256.tsv`), and then builds:
+
+| Folder | Content |
+| --- | --- |
+| `msg_all` | all entries (missing collision energies as `['nan']`), plus `magma_outputs` and `subformulae/no_subform.hdf5` from `data_scripts/dag/run_magma.sh` |
+| `msg_known_ce` | entries with known collision energies, sharing `msg_all` resources |
+| `msg` | simulation-challenge entries with known collision energies, sharing `msg_all` resources |
+| `msg_simulation` | built from `msg` by `create_msg_simulation_dataset.py` (below) |
+
+MAGMa annotation is the slow step; set `skip_magma=1` to skip it if
+`msg_all/magma_outputs` and `msg_all/subformulae` already exist.
+
 #### `msg_simulation`: Official Simulation-Challenge Subset
 
 The `msg_simulation` dataset is the MassSpecGym simulation-challenge subset. It is generated from the public

@@ -168,3 +168,10 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Generated MassSpecGym data (data_scripts/build_msg_datasets.sh)
+/data/raw
+/data/spec_datasets/msg*/spec_files*.hdf5
+/data/spec_datasets/msg*/magma_outputs
+/data/spec_datasets/msg*/subformulae
+/data/spec_datasets/msg*/retrieval
