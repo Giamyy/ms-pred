@@ -56,44 +56,59 @@ def main():
     folds = pd.read_csv(args.source_table, sep="\t", usecols=["identifier", "fold"])
     test_specs = set(folds.loc[folds["fold"].astype(str).str.strip().str.lower() == "test", "identifier"].astype(str))
     test = labels[labels["spec"].astype(str).isin(test_specs)].copy()
-    print(f"Test spectra in labels: {len(test)}")
+    print(f"Test spectra in labels: {len(test)}", flush=True)
 
     cand_maps = {name: json.loads(Path(path).read_text()) for name, path in args.candidates}
+    print(f"Loaded candidate lists: {', '.join(f'{k} ({len(v)} queries)' for k, v in cand_maps.items())}", flush=True)
 
-    # Normalise every distinct SMILES once (queries, their candidates, and the JSON keys)
-    to_norm = set(test["smiles"].astype(str))
-    for cmap in cand_maps.values():
-        to_norm.update(cmap.keys())
-        for q in set(test["smiles"].astype(str)) & set(cmap):
-            to_norm.update(cmap[q])
-    to_norm = sorted(to_norm)
-    with Pool(args.workers) as pool:
-        normed = dict(zip(to_norm, pool.map(normalize, to_norm, chunksize=2000)))
-    print(f"Normalised {len(to_norm)} distinct SMILES")
+    normed = {}
+
+    def normalize_all(smiles, label):
+        # Normalise each distinct SMILES once, in parallel; failures are cached as None too
+        todo = sorted(set(smiles) - normed.keys())
+        print(f"{label}: normalising {len(todo)} SMILES with {args.workers} workers", flush=True)
+        with Pool(args.workers) as pool:
+            for i, (smi, res) in enumerate(zip(todo, pool.imap(normalize, todo, chunksize=500)), 1):
+                normed[smi] = res
+                if i % 50000 == 0:
+                    print(f"  {i}/{len(todo)}", flush=True)
+
+    # 1) queries and every JSON key, so queries can be matched to keys by InChIKey
+    query_smiles = set(test["smiles"].astype(str))
+    normalize_all(query_smiles.union(*(cmap.keys() for cmap in cand_maps.values())), "queries + candidate-list keys")
+
+    # 2) pick the candidate list of each query, then normalise those candidates
+    matched = {}
+    for name, cmap in cand_maps.items():
+        ikey_to_key = {}
+        for key in cmap:
+            if normed.get(key) is not None:
+                ikey_to_key.setdefault(normed[key][1], key)
+        for q in query_smiles:
+            if normed.get(q) is not None:
+                matched[(name, q)] = q if q in cmap else ikey_to_key.get(normed[q][1])
+    needed = set()
+    for (name, q), key in matched.items():
+        if key is not None:
+            needed.update(cand_maps[name][key])
+    normalize_all(needed, "candidates")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     audit = {"test_spectra": int(len(test))}
     for name, cmap in cand_maps.items():
-        # Look up candidates by exact query SMILES, else by normalised InChIKey of the query
-        ikey_to_key = {}
-        for key in cmap:
-            n = normed.get(key)
-            if n is not None:
-                ikey_to_key.setdefault(n[1], key)
-
         rows, missing, unparsable = [], 0, 0
         for _, r in test.iterrows():
             true = normed.get(str(r["smiles"]))
             if true is None:
                 unparsable += 1
                 continue
-            key = r["smiles"] if r["smiles"] in cmap else ikey_to_key.get(true[1])
+            key = matched.get((name, str(r["smiles"])))
             if key is None:
                 missing += 1
                 continue
             cands = {true[1]: true[0]}
             for c in cmap[key]:
-                n = normed.get(c) or normalize(c)
+                n = normed.get(c)
                 if n is not None and n[1] not in cands:
                     cands[n[1]] = n[0]
                 if len(cands) >= args.max_k:
