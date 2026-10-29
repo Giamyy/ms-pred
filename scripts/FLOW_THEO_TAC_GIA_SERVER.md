@@ -3,9 +3,9 @@
 Flow chạy đúng các script MARASON của tác giả trong https://github.com/coleygroup/ms-pred
 (README, mục *Experiments → MARASON*), trên tập MassSpecGym `msg_simulation` (119.029 phổ).
 
-Dữ liệu đã được xử lý sẵn và để trên Kaggle: https://www.kaggle.com/datasets/giamyy/msg-simulation.
+Dữ liệu đã được xử lý sẵn và để trên Kaggle: https://www.kaggle.com/datasets/giamyy/msg-simulation-v2.
 Dataset gồm `labels.tsv`, `spec_files.hdf5`, `splits/`, `magma_outputs/magma_tree.hdf5`,
-`subformulae/no_subform.hdf5` và `retrieval/`. Vì vậy **bỏ qua phần xử lý dữ liệu** (dựng từ Hugging Face, chạy
+`subformulae/no_subform.hdf5`, `subformulae/magma_subform_50.hdf5` và `retrieval/`. Vì vậy **bỏ qua phần xử lý dữ liệu** (dựng từ Hugging Face, chạy
 MAGMa, gán subformula) và đi thẳng vào train.
 
 ---
@@ -37,7 +37,8 @@ Dòng cuối phải in `True`.
 ```bash
 cd ~/ms-pred
 mkdir -p ~/msg_dl
-curl -L -o ~/msg_dl/msg-simulation.zip https://www.kaggle.com/api/v1/datasets/download/giamyy/msg-simulation
+DS=giamyy/msg-simulation-v2      # bản có magma_subform_50.hdf5; dùng giamyy/msg-simulation thì phải bỏ bước 2
+curl -L -o ~/msg_dl/msg-simulation.zip https://www.kaggle.com/api/v1/datasets/download/$DS
 unzip -q ~/msg_dl/msg-simulation.zip -d ~/msg_dl/x
 
 # chép thư mục chứa labels.tsv vào đúng chỗ code đọc
@@ -47,9 +48,9 @@ cp -r "$SRC"/* data/spec_datasets/msg_simulation/
 ls data/spec_datasets/msg_simulation data/spec_datasets/msg_simulation/subformulae data/spec_datasets/msg_simulation/retrieval
 ```
 - Phải thấy đủ: `labels.tsv`, `spec_files.hdf5`, `splits/`, `magma_outputs/`, `subformulae/no_subform.hdf5`,
-  `retrieval/cands_df_test_formula_256.tsv`.
+  `subformulae/magma_subform_50.hdf5`, `retrieval/cands_df_test_formula_256.tsv`.
 - Nếu `curl` báo lỗi quyền truy cập: `pip install kaggle`, đặt token vào `~/.kaggle/kaggle.json`, rồi chạy
-  `kaggle datasets download giamyy/msg-simulation -p ~/msg_dl`.
+  `kaggle datasets download $DS -p ~/msg_dl`.
 - Chép xong có thể xoá `~/msg_dl` cho đỡ tốn chỗ.
 
 ---
@@ -122,9 +123,42 @@ python launcher_scripts/run_from_config.py configs/marason/marason_train_msg.yam
 ```
 Đầu ra: `results/marason_msg_simulation/split_rnd1/ckpt/gen/best.ckpt`. Tối đa 200 epoch, có early stopping.
 
-### Bước 2. Dò số mảnh (`02_sweep_gen_thresh.py`, tuỳ chọn, **bỏ qua**)
-Bước này cần `subformulae/magma_subform_50.hdf5`, mà dataset chưa có. Các bước sau không phụ thuộc bước này.
-`run_all.sh` của tác giả cũng ghi chú có thể bỏ.
+### Bước 2. Dò số mảnh (`02_sweep_gen_thresh.py`, tuỳ chọn)
+**Không chạy nguyên `run_scripts/marason/02_sweep_gen_thresh.py`.** Script này không còn khớp với code hiện tại: nó truyền
+`--num-workers` cho `predict_gen.py` và `--tree-pred-folder` cho `form_pred_eval.py`, nhưng hai script không nhận các
+tham số đó. Chạy cùng quy trình theo bản cập nhật của tác giả cho ICEBERG
+(`run_scripts/iceberg/nist23/02_sweep_gen_thresh.py`): sinh DAG cho tập test với từng số mảnh tối đa, rồi đánh giá
+trực tiếp `tree_preds.hdf5` so với `magma_subform_50.hdf5`.
+
+```bash
+R=results/marason_msg_simulation/split_rnd1
+W=$(nproc)
+NODES=(10 20 30 40 50 100 200 300 500 1000)
+GPUW=(8 8 8 8 8 6 4 3 2 2)               # số worker GPU cho mỗi mức, như trong 02_sweep_gen_thresh.py (1 GPU)
+for i in "${!NODES[@]}"; do
+  n=${NODES[$i]}; d=$R/inten_thresh_sweep/$n; mkdir -p $d
+  CUDA_VISIBLE_DEVICES=0 python src/ms_pred/marason/predict_gen.py \
+    --batch-size 8 --dataset-name msg_simulation --split-name split.tsv --subset-datasets test_only \
+    --checkpoint-pth $R/ckpt/gen/best.ckpt --save-dir $d --threshold 0 --max-nodes $n \
+    --num-cpu-workers $W --num-gpu-workers ${GPUW[$i]} --gpu
+  python analysis/form_pred_eval.py --dataset msg_simulation \
+    --tree-pred-obj $d/tree_preds.hdf5 --subform-name magma_subform_50.hdf5
+done
+
+python - <<'EOF'
+import yaml, pandas as pd
+from pathlib import Path
+d = Path("results/marason_msg_simulation/split_rnd1/inten_thresh_sweep")
+rows = [{"nm_nodes": n, **{k: v for k, v in yaml.safe_load(open(d / str(n) / "pred_eval.yaml")).items() if "avg" in k}}
+        for n in [10, 20, 30, 40, 50, 100, 200, 300, 500, 1000]]
+df = pd.DataFrame(rows)
+df.to_csv(d / "summary.tsv", sep="\t", index=None)
+print(df.to_string(index=False))
+EOF
+```
+- Máy 2 GPU: `CUDA_VISIBLE_DEVICES=0,1` và nhân đôi các số trong `GPUW`.
+- Đầu ra: `split_rnd1/inten_thresh_sweep/<N>/pred_eval.yaml` và bảng `split_rnd1/inten_thresh_sweep/summary.tsv`.
+- Bước này chỉ đánh giá bộ sinh mảnh. Các bước sau không phụ thuộc vào nó và dùng 100 mảnh như config.
 
 ### Bước 3. Sinh DAG cho tập train và gắn phổ thật (`03_run_marason_gen_predict.sh`, phần MSG)
 ```bash
@@ -186,5 +220,6 @@ cat retrieval_msg_simulation_test_formula_256/rerank_eval_entropy.yaml
 | `visible_devices`, `devices` | Config gốc giả định 2–3 GPU |
 | `load-reference false`, `save-reference true` (lần đầu) và tạo thư mục | Config gốc đọc phổ tham chiếu đã tính sẵn mà repo không kèm; `train_inten.py` không tự tạo thư mục |
 | `run_retrieval_msg.py` | Script tìm checkpoint ở `results/marason_inten_msg/…/version_0/`, nhưng config train lưu ở `results/marason_msg_simulation/split_rnd1/ckpt/{gen,inten}/`; phổ tham chiếu và dataset đổi sang `msg_simulation` |
-| Bỏ bước 2 | Cần `magma_subform_50.hdf5`; bước tuỳ chọn |
+| Bước 2 chạy bằng vòng lặp thay cho `02_sweep_gen_thresh.py` | Script MARASON truyền tham số mà `predict_gen.py` / `form_pred_eval.py` không nhận; làm theo bản ICEBERG cập nhật của tác giả (`run_scripts/iceberg/nist23/02_sweep_gen_thresh.py`) |
+| `magma_subform_50.hdf5` | Tạo bằng lệnh `--use-magma` trong `data_scripts/all_assign_subform.sh` (notebook `kaggle_magma_subform50.ipynb`), có trong dataset `msg-simulation-v2` |
 | Chỉ chạy seed 1 (`split_rnd1`) | Để tái lập số liệu 3 seed trong bài báo, bỏ comment các mục `split_rnd2`, `split_rnd3` trong 3 config MSG, trong `03_…sh` (khối `add_dag_intens.py`) và trong `05_…py`, rồi chạy lại từ bước 1 |

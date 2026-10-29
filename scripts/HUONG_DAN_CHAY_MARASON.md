@@ -6,10 +6,11 @@ MassSpecGym 1.5, chạy trên server Linux có GPU NVIDIA. Toàn bộ quy trình
 | Script | Việc |
 |---|---|
 | `scripts/setup_env_uv.sh` | Cài môi trường Python (một lần) |
-| `scripts/train_marason_msg.py` | Tải dữ liệu từ Kaggle, train, dự đoán, đánh giá (B0–B6) |
+| `scripts/train_marason_msg.py` | Tải dữ liệu từ Kaggle, train, dự đoán, đánh giá (B0–B6, thêm S2 nếu dùng `--sweep`) |
 
 - Mã nguồn: https://github.com/Giamyy/ms-pred, nhánh `claude/code-explanation-frix3g` (fork của `coleygroup/ms-pred`)
 - Dữ liệu đã xử lý: https://www.kaggle.com/datasets/giamyy/msg-simulation
+  (bản `giamyy/msg-simulation-v2` có thêm `subformulae/magma_subform_50.hdf5`, cần cho bước S2)
 
 ---
 
@@ -28,6 +29,8 @@ Quy trình (theo `run_scripts/marason/run_all.sh` của tác giả):
 Kaggle dataset ──B0──▶ data/spec_datasets/msg_simulation/
                               │
 magma_tree ──B1──▶ gen.ckpt ──B2──▶ DAG dự đoán ──B3 (+ phổ thật)──▶ DAG + raw_spec
+                       │
+                       └──S2 (tuỳ chọn): dò số mảnh, so với magma_subform_50
                                                                        │
                               B4: phổ tham chiếu + train ──────────────┘──▶ inten.ckpt
                                                                                │
@@ -48,6 +51,7 @@ Dữ liệu được dựng trên Kaggle bằng notebook `notebooks/kaggle/kaggl
 | Subformula `subformulae/no_subform.hdf5` | `data_scripts/forms/01_assign_subformulae.py --use-all` | Script gốc |
 | Bảng ứng viên `retrieval/cands_df_test_formula_256.tsv` | Dropbox của tác giả | Gốc |
 | Bảng ứng viên `retrieval/cands_df_test_mass_256.tsv` | `data_scripts/create_msg_candidate_tables.py`, từ danh sách ứng viên công khai của MassSpecGym | Tự dựng lại |
+| Subformula `subformulae/magma_subform_50.hdf5` (chỉ cho S2) | `data_scripts/forms/01_assign_subformulae.py --use-magma --mass-diff-thresh 20` (lệnh trong `data_scripts/all_assign_subform.sh`), chạy chia shard bằng notebook `notebooks/kaggle/kaggle_magma_subform50.ipynb`, lưu thành dataset `msg-simulation-v2` | Script gốc; chia/gộp tự viết |
 
 - Số phổ: **119.029**. Chia train/val/test theo cột `fold` chính thức của MassSpecGym.
 - MAGMa sinh được cây cho khoảng 99,8% số phổ. Phần còn lại bị bỏ qua vì không sinh được mảnh hoặc không có đỉnh dùng được.
@@ -146,7 +150,8 @@ Gửi job bằng `sbatch job.sh`, theo dõi bằng `squeue -u $USER`, huỷ bằ
 | `--gen-batch` / `--inten-batch` | 32 / 16 | batch size khi train B1 / B4 |
 | `--gen-pred-batch` / `--inten-pred-batch` / `--retrieval-batch` | 8 / 64 / 10 | batch size khi dự đoán B2 / B5 / B6 |
 | `--max-epochs` | 200 | số epoch tối đa của B1, B4 (có early stopping) |
-| `--steps` | `B1 … B6` | chỉ chạy một số bước |
+| `--steps` | `B1 … B6` | chỉ chạy một số bước (có thể gồm `S2`) |
+| `--sweep` | | chạy thêm S2 (dò số mảnh); cần `subformulae/magma_subform_50.hdf5` |
 | `--force` | | chạy lại bước đã xong |
 | `--kaggle-dataset` | `giamyy/msg-simulation` | dataset Kaggle cần tải |
 | `--skip-download` / `--keep-download` | | không tải / giữ file zip sau khi giải nén |
@@ -175,6 +180,19 @@ và `magma_outputs/magma_tree.hdf5`, chuyển vào `data/spec_datasets/msg_simul
   dự đoán nguyên tử nào bị tách ra. Learning rate 0,000996, giảm 0,7214 mỗi epoch.
 - **Dừng:** tối đa 200 epoch; early stopping khi `val_loss` không giảm trong 5 epoch liên tiếp.
 - **Đầu ra:** `ckpt/gen/best.ckpt`
+
+### S2. Dò số mảnh (tuỳ chọn, `--sweep`)
+- **Tương ứng:** bước 2 của tác giả, `run_scripts/marason/02_sweep_gen_thresh.py`.
+- **Việc:** với mỗi số mảnh tối đa trong {10, 20, 30, 40, 50, 100, 200, 300, 500, 1000}, dùng bộ sinh mảnh của B1 sinh
+  DAG cho tập test (`predict_gen.py --subset-datasets test_only --threshold 0 --max-nodes N`, batch 8). Sau đó so các mảnh
+  với `subformulae/magma_subform_50.hdf5` bằng `analysis/form_pred_eval.py` (độ phủ, Jaccard…). Kết quả cho biết nên
+  giữ bao nhiêu mảnh; các bước sau dùng 100 như config của tác giả.
+- **Vì sao không gọi thẳng script gốc:** `02_sweep_gen_thresh.py` của MARASON truyền `--num-workers` cho `predict_gen.py`
+  và `--tree-pred-folder` cho `form_pred_eval.py`, nhưng hai script này không nhận các tham số đó, nên sẽ lỗi. S2 làm theo
+  bản cập nhật của tác giả cho ICEBERG (`run_scripts/iceberg/nist23/02_sweep_gen_thresh.py`): đánh giá trực tiếp
+  `tree_preds.hdf5`.
+- **Đầu ra:** `inten_thresh_sweep/<N>/pred_eval.yaml` và bảng tổng hợp `inten_thresh_sweep/summary.tsv`.
+- S2 không ảnh hưởng B2–B6. Chạy lại B1 thì kết quả S2 cũ bị xoá.
 
 ### B2. Sinh DAG phân mảnh
 - **Script:** `src/ms_pred/marason/predict_gen.py` (config `marason_gen_predict_train_msg.yaml`)
@@ -246,6 +264,7 @@ và `magma_outputs/magma_tree.hdf5`, chuyển vào `data/spec_datasets/msg_simul
 ```bash
 tail -40 results/marason_msg_simulation/logs/B5.log
 tail -40 results/marason_msg_simulation/logs/B6.log
+cat results/marason_msg_simulation/split_rnd1/inten_thresh_sweep/summary.tsv    # nếu chạy S2
 grep "xong sau" results/marason_msg_simulation/logs/*.log
 ```
 
@@ -260,6 +279,7 @@ grep "xong sau" results/marason_msg_simulation/logs/*.log
 | Entropy similarity (test) | |
 | Retrieval top-1 / 5 / 10, bảng formula | |
 | Retrieval top-1 / 5 / 10, bảng mass | |
+| S2: độ phủ subformula theo số mảnh (nếu chạy) | |
 | So với bài báo MARASON | |
 
 ### Khác biệt so với quy trình của tác giả
@@ -270,4 +290,6 @@ grep "xong sau" results/marason_msg_simulation/logs/*.log
   ảnh hưởng nhẹ tới kết quả.
 - Script `run_retrieval_msg.py` gốc dùng đường dẫn checkpoint và phổ tham chiếu không khớp với nơi các config train lưu.
   B6 gọi trực tiếp `predict_smis.py` và `retrieval_benchmark.py` với cùng tham số như script gốc, nhưng dùng đường dẫn đúng.
+- Bước 2 (dò số mảnh) không dùng nguyên `02_sweep_gen_thresh.py` của MARASON vì script không khớp code hiện tại; S2 làm
+  theo bản ICEBERG cập nhật của tác giả (xem mục S2).
 - Chỉ chạy một seed (`split_rnd1`). Các config gốc để sẵn `split_rnd2` và `split_rnd3` nhưng đã comment lại.
