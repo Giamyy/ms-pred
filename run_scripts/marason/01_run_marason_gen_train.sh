@@ -1,2 +1,2 @@
-python launcher_scripts/run_from_config.py configs/marason/marason_train_nist20.yaml
+# python launcher_scripts/run_from_config.py configs/marason/marason_train_nist20.yaml
 python launcher_scripts/run_from_config.py configs/marason/marason_train_msg.yaml

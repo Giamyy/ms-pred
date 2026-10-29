@@ -24,16 +24,17 @@ add_ref = True
 
 test_entries = [
     {
-        "dataset": "msg",
-        "results_name": "msg",
+        "dataset": "msg_simulation",
+        "results_name": "msg_simulation",
         "test_split": "test_formula",
         "split_name": "split.tsv",
-        "candidate_table": "data/spec_datasets/msg/retrieval/cands_df_test_formula_256.tsv",
-        "true_labels": "data/spec_datasets/msg/labels.tsv",
-        "inten_folder": "split_rnd1",
+        "candidate_table": "data/spec_datasets/msg_simulation/retrieval/cands_df_test_formula_256.tsv",
+        "true_labels": "data/spec_datasets/msg_simulation/labels.tsv",
+        "inten_folder": f"split_rnd{seed}",
         "max_k": 256,
-        "ref_dir": "data/msg/closest_neighbors/infinite",
-    },
+        "ref_dir": "data/msg_simulation/closest_neighbors/infinite",
+    }
+    for seed in (1, 2, 3)
 ]
 
 pred_filename = "binned_preds.hdf5" if binned_out else "preds.hdf5"
@@ -45,8 +46,8 @@ for test_entry in test_entries:
     split = test_entry["test_split"]
     split_name = test_entry.get("split_name", "split.tsv")
     maxk = test_entry["max_k"]
-    inten_dir = Path(f"results/marason_inten_{results_name}")
-    inten_model = inten_dir / inten_split / "version_0/best.ckpt"
+    inten_dir = Path(f"results/marason_{results_name}")
+    inten_model = inten_dir / inten_split / "ckpt/inten/best.ckpt"
 
     if not inten_model.exists():
         print(f"Could not find model {inten_model}; skipping\n: {json.dumps(test_entry, indent=1)}")
@@ -61,9 +62,8 @@ for test_entry in test_entries:
     save_dir = inten_dir / inten_split / f"retrieval_{dataset}_{split}_{maxk}"
     save_dir.mkdir(exist_ok=True, parents=True)
 
-    args = yaml.safe_load(open(inten_dir / inten_split / "args.yaml", "r"))
-    form_folder = Path(args["magma_dag_folder"])
-    gen_model = form_folder.parent / "version_0/best.ckpt"
+    magma_dag_folder = inten_dir / inten_split / "preds_train_100_inten.hdf5"
+    gen_model = inten_dir / inten_split / "ckpt/gen/best.ckpt"
     print(gen_model)
 
     save_dir = save_dir
@@ -83,7 +83,7 @@ for test_entry in test_entries:
     --dataset-labels {labels} \\
     --num-cpu-workers {num_cpu_workers} \\
     --num-gpu-workers {num_gpu_workers} \\
-    --magma-dag-folder {args["magma_dag_folder"]} \\
+    --magma-dag-folder {magma_dag_folder} \\
     --adduct-shift \\
     --gpu \\
     --embed-elem-group \\

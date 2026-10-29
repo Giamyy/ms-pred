@@ -63,17 +63,21 @@ universal_args:
 
 
 iterative_args:
+  # seed 1 computes and saves the reference pairs (README: save-reference); seeds 2 and 3 load them.
+  # The reference only depends on split.tsv, so it is shared across seeds.
   -  split-name: [split.tsv]
      save-dir: [split_rnd1]
      magma-dag-folder: [results/marason_msg_simulation/split_rnd1/preds_train_100_inten.hdf5]
      seed: [1]
+     load-reference: [false]
+     save-reference: [true]
 
-  # -  split-name: [split.tsv]
-  #    save-dir: [split_rnd2_entropy]
-  #    magma-dag-folder: [results/marason_msg_simulation/split_rnd2/preds_train_100_inten.hdf5]
-  #    seed: [2]
+  -  split-name: [split.tsv]
+     save-dir: [split_rnd2]
+     magma-dag-folder: [results/marason_msg_simulation/split_rnd2/preds_train_100_inten.hdf5]
+     seed: [2]
 
-  # -  split-name: [split.tsv]
-  #    save-dir: [split_rnd3_entropy]
-  #    magma-dag-folder: [results/marason_msg_simulation/split_rnd3/preds_train_100_inten.hdf5]
-  #    seed: [3]
+  -  split-name: [split.tsv]
+     save-dir: [split_rnd3]
+     magma-dag-folder: [results/marason_msg_simulation/split_rnd3/preds_train_100_inten.hdf5]
+     seed: [3]

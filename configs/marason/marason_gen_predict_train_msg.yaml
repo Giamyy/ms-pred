@@ -26,11 +26,11 @@ iterative_args:
      checkpoint-pth: [results/marason_msg_simulation/split_rnd1/ckpt/gen/best.ckpt]
      save-dir: [split_rnd1/preds_train_100]
 
-  # -  split-name: [split.tsv]
-  #    checkpoint-pth: [results/marason_msg_simulation/split_rnd2/ckpt/gen/best.ckpt]
-  #    save-dir: [split_rnd2/preds_train_100]
+  -  split-name: [split.tsv]
+     checkpoint-pth: [results/marason_msg_simulation/split_rnd2/ckpt/gen/best.ckpt]
+     save-dir: [split_rnd2/preds_train_100]
 
-  # -  split-name: [split.tsv]
-  #    checkpoint-pth: [results/marason_msg_simulation/split_rnd3/ckpt/gen/best.ckpt]
-  #    save-dir: [split_rnd3/preds_train_100]
+  -  split-name: [split.tsv]
+     checkpoint-pth: [results/marason_msg_simulation/split_rnd3/ckpt/gen/best.ckpt]
+     save-dir: [split_rnd3/preds_train_100]
 

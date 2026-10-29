@@ -7,9 +7,9 @@ node_num = 100
 num_workers = 64
 test_entries = [
     {"dataset": "msg_simulation", "split": "split", "folder": "split_rnd1"},
-    # {"dataset": "msg_simulation", "split": "split", "folder": "split_rnd2"},
-    # {"dataset": "msg_simulation", "split": "split", "folder": "split_rnd3"},
-    {"dataset": "nist20", "split": "split_1", "folder": "split_1_rnd1"},
+    {"dataset": "msg_simulation", "split": "split", "folder": "split_rnd2"},
+    {"dataset": "msg_simulation", "split": "split", "folder": "split_rnd3"},
+    # {"dataset": "nist20", "split": "split_1", "folder": "split_1_rnd1"},
     # {"dataset": "nist20", "split": "split_1", "folder": "split_1_rnd2"},
     # {"dataset": "nist20", "split": "split_1", "folder": "split_1_rnd3"},
 ]
