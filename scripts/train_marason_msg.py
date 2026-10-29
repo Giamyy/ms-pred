@@ -5,6 +5,7 @@ Same steps as run_scripts/marason/run_all.sh (without MAGMA, which the dataset a
 
     B0  download the dataset          Kaggle giamyy/msg-simulation (skipped if already in place)
     B1  train fragment generator      configs/marason/marason_train_msg.yaml
+    S2  sweep fragment counts         as run_scripts/marason/02_sweep_gen_thresh.py (optional: --sweep)
     B2  predict DAGs                  configs/marason/marason_gen_predict_train_msg.yaml
     B3  add true intensities          data_scripts/dag/add_dag_intens.py
     B4  references + train intensity  configs/marason/marason_inten_train_msg.yaml
@@ -19,6 +20,7 @@ a .done_B* marker, so re-running the script resumes after the last finished step
     python scripts/train_marason_msg.py --steps B5 B6          # only some steps
     python scripts/train_marason_msg.py --gpus 0,1 --gen-batch 16
     python scripts/train_marason_msg.py --steps B4 --force     # redo a finished step
+    python scripts/train_marason_msg.py --sweep                # also run S2 (needs subformulae/magma_subform_50.hdf5)
 """
 
 from __future__ import annotations
@@ -40,6 +42,11 @@ from pathlib import Path
 import yaml
 
 ALL_STEPS = ["B1", "B2", "B3", "B4", "B5", "B6"]
+# S2 only evaluates the generator; nothing later depends on it, so it is not part of the B* chain
+STEP_ORDER = ["B1", "S2", "B2", "B3", "B4", "B5", "B6"]
+SWEEP_MAX_NODES = [10, 20, 30, 40, 50, 100, 200, 300, 500, 1000]
+SWEEP_GPU_WORKERS = [8, 8, 8, 8, 8, 6, 4, 3, 2, 2]     # per GPU, as in 02_sweep_gen_thresh.py
+SUBFORM_50 = "magma_subform_50.hdf5"
 DATASET = "msg_simulation"
 
 REPO = Path(__file__).resolve().parents[1]
@@ -66,7 +73,9 @@ def get_args():
     parser.add_argument("--retrieval-batch", type=int, default=10, help="B6 batch size (run_retrieval default 10)")
     parser.add_argument("--max-epochs", type=int, default=200,
                         help="B1/B4 epochs (config default 200; early stopping usually ends sooner)")
-    parser.add_argument("--steps", nargs="+", default=ALL_STEPS, choices=ALL_STEPS)
+    parser.add_argument("--steps", nargs="+", default=ALL_STEPS, choices=STEP_ORDER)
+    parser.add_argument("--sweep", action="store_true",
+                        help="also run S2, the fragment-count sweep (needs subformulae/magma_subform_50.hdf5)")
     parser.add_argument("--force", action="store_true", help="run the chosen steps even if already done")
     parser.add_argument("--kaggle-dataset", default=KAGGLE_DATASET,
                         help="Kaggle dataset <owner>/<name> to download when the data is missing")
@@ -120,6 +129,47 @@ class Runner:
         self.launch("configs/marason/marason_train_msg.yaml", "train_gen.yaml",
                     num_workers=a.num_workers, batch_size=a.gen_batch, max_epochs=a.max_epochs)
         require(RUN / "ckpt/gen/best.ckpt")
+
+    def s2(self):
+        """Fragment-count sweep of run_scripts/marason/02_sweep_gen_thresh.py.
+
+        The upstream MARASON script no longer matches the code (it passes --num-workers to predict_gen.py and
+        --tree-pred-folder to form_pred_eval.py, which accept neither), so this follows the up-to-date ICEBERG
+        version (run_scripts/iceberg/nist23/02_sweep_gen_thresh.py): predict the test DAGs with each max-nodes,
+        then evaluate tree_preds.hdf5 directly against magma_subform_50.hdf5.
+        """
+        require(DATA / "subformulae" / SUBFORM_50)
+        n_gpus = len(self.gpus.split(","))
+        sweep_dir = RUN / "inten_thresh_sweep"
+        rows = []
+        for max_nodes, gpu_workers in zip(SWEEP_MAX_NODES, SWEEP_GPU_WORKERS):
+            out = sweep_dir / str(max_nodes)
+            out.mkdir(parents=True, exist_ok=True)
+            pred_eval = out / "pred_eval.yaml"
+            if not pred_eval.exists():
+                self.sh([sys.executable, "src/ms_pred/marason/predict_gen.py",
+                         "--batch-size", self.args.gen_pred_batch,
+                         "--dataset-name", DATASET,
+                         "--split-name", "split.tsv",
+                         "--subset-datasets", "test_only",
+                         "--checkpoint-pth", RUN / "ckpt/gen/best.ckpt",
+                         "--save-dir", out,
+                         "--threshold", 0,
+                         "--max-nodes", max_nodes,
+                         "--num-cpu-workers", self.args.num_workers,
+                         "--num-gpu-workers", min(n_gpus * gpu_workers, self.args.num_workers),
+                         "--gpu"], gpu=True)
+                self.sh([sys.executable, "analysis/form_pred_eval.py",
+                         "--dataset", DATASET,
+                         "--tree-pred-obj", out / "tree_preds.hdf5",
+                         "--subform-name", SUBFORM_50])
+            res = yaml.safe_load(open(pred_eval))
+            rows.append({"nm_nodes": max_nodes, **{k: v for k, v in res.items() if "avg" in k}})
+        cols = list(rows[0])
+        lines = ["\t".join(cols)] + ["\t".join(str(r.get(c, "")) for c in cols) for r in rows]
+        (sweep_dir / "summary.tsv").write_text("\n".join(lines) + "\n")
+        print("\n".join(lines))
+        self.log.write("\n".join(lines) + "\n")
 
     def b2(self):
         a = self.args
@@ -217,8 +267,12 @@ class Runner:
             print(f"== {name}: đã xong trước đó, bỏ qua (--force để chạy lại)")
             return
         # This step and the later ones that depend on it count as not done until this run succeeds
-        for later in ALL_STEPS[ALL_STEPS.index(name):]:
+        stale = [name] if name == "S2" else ALL_STEPS[ALL_STEPS.index(name):] + (["S2"] if name == "B1" else [])
+        for later in stale:
             (RUN / f".done_{later}").unlink(missing_ok=True)
+        if "S2" in stale and (name == "B1" or self.args.force):
+            # S2 resumes per max-nodes from pred_eval.yaml; results of an older generator must not be reused
+            shutil.rmtree(RUN / "inten_thresh_sweep", ignore_errors=True)
         log_path = LOG_DIR / f"{name}.log"
         print(f"== {name}: bắt đầu {datetime.now():%Y-%m-%d %H:%M:%S}, log: {log_path}", flush=True)
         t0 = time.time()
@@ -342,7 +396,7 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
     print(f"GPU: {args.gpus} | workers: {args.num_workers} | batch gen/inten: {args.gen_batch}/{args.inten_batch}"
           f" | epochs: {args.max_epochs}")
-    steps = [s for s in ALL_STEPS if s in args.steps]
+    steps = [s for s in STEP_ORDER if s in args.steps or (s == "S2" and args.sweep)]
     print("Các bước:", " ".join(steps))
 
     runner = Runner(args)
