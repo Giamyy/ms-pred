@@ -3,6 +3,7 @@
 
 Same steps as run_scripts/marason/run_all.sh (without MAGMA, which the dataset already has):
 
+    B0  download the dataset          Kaggle giamyy/msg-simulation (skipped if already in place)
     B1  train fragment generator      configs/marason/marason_train_msg.yaml
     B2  predict DAGs                  configs/marason/marason_gen_predict_train_msg.yaml
     B3  add true intensities          data_scripts/dag/add_dag_intens.py
@@ -23,10 +24,16 @@ a .done_B* marker, so re-running the script resumes after the last finished step
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import os
+import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -42,6 +49,9 @@ RUN = RES / "split_rnd1"
 REF_DIR = Path("data") / DATASET / "closest_neighbors/infinite"
 CFG_DIR = RES / "local_configs"
 LOG_DIR = RES / "logs"
+KAGGLE_DATASET = "giamyy/msg-simulation"           # https://www.kaggle.com/datasets/giamyy/msg-simulation
+REQUIRED = ["labels.tsv", "spec_files.hdf5", "splits/split.tsv",
+            "magma_outputs/magma_tree.hdf5", "subformulae/no_subform.hdf5"]
 
 
 def get_args():
@@ -58,6 +68,12 @@ def get_args():
                         help="B1/B4 epochs (config default 200; early stopping usually ends sooner)")
     parser.add_argument("--steps", nargs="+", default=ALL_STEPS, choices=ALL_STEPS)
     parser.add_argument("--force", action="store_true", help="run the chosen steps even if already done")
+    parser.add_argument("--kaggle-dataset", default=KAGGLE_DATASET,
+                        help="Kaggle dataset <owner>/<name> to download when the data is missing")
+    parser.add_argument("--download-dir", type=Path, default=Path("data/kaggle_download"),
+                        help="where the zip is downloaded and extracted")
+    parser.add_argument("--keep-download", action="store_true", help="keep the zip after extracting")
+    parser.add_argument("--skip-download", action="store_true", help="never download, only use local data")
     return parser.parse_args()
 
 
@@ -217,13 +233,107 @@ def require(path: Path):
         raise RuntimeError(f"Không thấy {path}")
 
 
+def kaggle_auth_header():
+    """Basic auth from KAGGLE_USERNAME/KAGGLE_KEY or ~/.kaggle/kaggle.json; public datasets need none."""
+    user, key = os.environ.get("KAGGLE_USERNAME"), os.environ.get("KAGGLE_KEY")
+    cred_file = Path(os.environ.get("KAGGLE_CONFIG_DIR", Path.home() / ".kaggle")) / "kaggle.json"
+    if not (user and key) and cred_file.exists():
+        cred = json.loads(cred_file.read_text())
+        user, key = cred.get("username"), cred.get("key")
+    if user and key:
+        return {"Authorization": "Basic " + base64.b64encode(f"{user}:{key}".encode()).decode()}
+    return {}
+
+
+def download_kaggle_zip(dataset: str, zip_path: Path):
+    url = f"https://www.kaggle.com/api/v1/datasets/download/{dataset}"
+    print(f"Tải {url}", flush=True)
+    req = urllib.request.Request(url, headers={"User-Agent": "ms-pred", **kaggle_auth_header()})
+    part = zip_path.with_suffix(".zip.part")
+    try:
+        with urllib.request.urlopen(req) as resp, open(part, "wb") as fp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done, next_report, t0 = 0, 0.0, time.time()
+            while chunk := resp.read(8 << 20):
+                fp.write(chunk)
+                done += len(chunk)
+                if total and done / total >= next_report:
+                    print(f"  {done / 2**30:.2f} / {total / 2**30:.2f} GB ({100 * done / total:.0f}%), "
+                          f"{(time.time() - t0) / 60:.1f} phút", flush=True)
+                    next_report += 0.05
+    except urllib.error.HTTPError as e:
+        part.unlink(missing_ok=True)
+        hint = (" Dataset private hoặc sai tên: đặt token Kaggle vào ~/.kaggle/kaggle.json "
+                "(Kaggle -> Settings -> API -> Create New Token).") if e.code in (401, 403, 404) else ""
+        raise RuntimeError(f"Không tải được {url}: HTTP {e.code}.{hint}") from e
+    part.rename(zip_path)
+
+
+def find_dataset_root(base: Path) -> Path | None:
+    """The folder under base that holds labels.tsv and magma_outputs/magma_tree.hdf5.
+
+    Prefers a folder named msg_simulation* (an export can also hold spec_datasets/msg/), then the shallowest.
+    """
+    def rank(labels):
+        return (not labels.parent.name.startswith(DATASET), len(labels.parts))
+    for labels in sorted(base.rglob("labels.tsv"), key=rank):
+        if (labels.parent / "magma_outputs/magma_tree.hdf5").exists():
+            return labels.parent
+    return None
+
+
+def prepare_data(args):
+    """B0: make sure data/spec_datasets/msg_simulation is complete, downloading it from Kaggle if needed."""
+    missing = [f for f in REQUIRED if not (DATA / f).exists()]
+    if not missing:
+        print(f"== B0: dữ liệu đã có trong {DATA}, không cần tải")
+        return
+    if args.skip_download:
+        raise RuntimeError(f"Thiếu {', '.join(str(DATA / f) for f in missing)} (đang dùng --skip-download)")
+
+    print(f"== B0: thiếu {', '.join(missing)} trong {DATA}; tải dataset Kaggle {args.kaggle_dataset}", flush=True)
+    t0 = time.time()
+    down = args.download_dir
+    down.mkdir(parents=True, exist_ok=True)
+    zip_path = down / (args.kaggle_dataset.replace("/", "__") + ".zip")
+    extract_dir = down / "extracted"
+
+    root = find_dataset_root(extract_dir) if extract_dir.exists() else None
+    if root is None:
+        if not zip_path.exists():
+            download_kaggle_zip(args.kaggle_dataset, zip_path)
+        print(f"Giải nén {zip_path} -> {extract_dir}", flush=True)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+        root = find_dataset_root(extract_dir)
+        if root is None:
+            raise RuntimeError(f"Trong {zip_path} không có thư mục nào chứa labels.tsv và "
+                               "magma_outputs/magma_tree.hdf5")
+    print(f"Thư mục dữ liệu trong dataset: {root.relative_to(extract_dir)}")
+
+    # Move (not copy) so the data is not stored twice on disk
+    DATA.mkdir(parents=True, exist_ok=True)
+    for item in root.iterdir():
+        dst = DATA / item.name
+        if dst.exists():
+            shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+        shutil.move(str(item), str(dst))
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    if not args.keep_download:
+        zip_path.unlink(missing_ok=True)
+
+    missing = [f for f in REQUIRED if not (DATA / f).exists()]
+    if missing:
+        raise RuntimeError(f"Dataset tải về thiếu {', '.join(missing)}")
+    print("Đã có:", ", ".join(sorted(p.name for p in DATA.iterdir())))
+    print(f"== B0: xong sau {(time.time() - t0) / 60:.0f} phút", flush=True)
+
+
 def main():
     args = get_args()
     os.chdir(REPO)
-    for f in ["labels.tsv", "spec_files.hdf5", "splits/split.tsv",
-              "magma_outputs/magma_tree.hdf5", "subformulae/no_subform.hdf5"]:
-        if not (DATA / f).exists():
-            sys.exit(f"Thiếu {DATA / f}")
+    prepare_data(args)
     import torch
     if not torch.cuda.is_available():
         sys.exit("torch không thấy GPU (kiểm tra driver / môi trường: source .venv/bin/activate)")
