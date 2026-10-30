@@ -6,7 +6,7 @@ MassSpecGym 1.5, chạy trên server Linux có GPU NVIDIA. Toàn bộ quy trình
 | Script | Việc |
 |---|---|
 | `scripts/setup_env_uv.sh` | Cài môi trường Python (một lần) |
-| `scripts/train_marason_msg.py` | Tải dữ liệu từ Kaggle, train, dự đoán, đánh giá (B0–B6, thêm S2 nếu dùng `--sweep`) |
+| `scripts/train_marason_msg.py` | Tải và kiểm tra dữ liệu từ Kaggle, train, dự đoán, đánh giá (B0–B6, thêm S2 khi có `magma_subform_50.hdf5`) |
 
 - Mã nguồn: https://github.com/Giamyy/ms-pred, nhánh `claude/code-explanation-frix3g` (fork của `coleygroup/ms-pred`)
 - Dữ liệu đã xử lý: https://www.kaggle.com/datasets/giamyy/msg-simulation
@@ -150,10 +150,11 @@ Gửi job bằng `sbatch job.sh`, theo dõi bằng `squeue -u $USER`, huỷ bằ
 | `--gen-batch` / `--inten-batch` | 32 / 16 | batch size khi train B1 / B4 |
 | `--gen-pred-batch` / `--inten-pred-batch` / `--retrieval-batch` | 8 / 64 / 10 | batch size khi dự đoán B2 / B5 / B6 |
 | `--max-epochs` | 200 | số epoch tối đa của B1, B4 (có early stopping) |
-| `--steps` | `B1 … B6` | chỉ chạy một số bước (có thể gồm `S2`) |
-| `--sweep` | | chạy thêm S2 (dò số mảnh); cần `subformulae/magma_subform_50.hdf5` |
+| `--steps` | `B1 … B6` (+ `S2`) | chỉ chạy đúng các bước này (có thể gồm `S2`) |
+| `--sweep` / `--no-sweep` | tự động | mặc định S2 chạy khi có `subformulae/magma_subform_50.hdf5`; `--sweep` bắt buộc chạy (thiếu file thì tải dataset v2), `--no-sweep` không chạy |
+| `--check` / `--skip-check` | | kiểm tra lại dataset dù đã qua / bỏ qua kiểm tra |
 | `--force` | | chạy lại bước đã xong |
-| `--kaggle-dataset` | `giamyy/msg-simulation` | dataset Kaggle cần tải |
+| `--kaggle-dataset` | `giamyy/msg-simulation-v2` | dataset Kaggle cần tải |
 | `--skip-download` / `--keep-download` | | không tải / giữ file zip sau khi giải nén |
 
 Config gốc trong `configs/marason/` được giữ nguyên. Script chép chúng sang
@@ -168,10 +169,14 @@ Mỗi bước ghi log vào `results/marason_msg_simulation/logs/B*.log`. Khi bư
 `split_rnd1/.done_B*`. Nếu job bị dừng, chạy lại đúng lệnh cũ: các bước đã xong được bỏ qua. Khi một bước được chạy lại,
 các bước sau nó cũng được đánh dấu là cần chạy lại. Thư mục kết quả: `results/marason_msg_simulation/split_rnd1/`.
 
-### B0. Tải dữ liệu
+### B0. Tải và kiểm tra dữ liệu
 Nếu `data/spec_datasets/msg_simulation/` chưa đủ file, script tải zip của dataset Kaggle qua
-`https://www.kaggle.com/api/v1/datasets/download/giamyy/msg-simulation`. Sau đó giải nén, tìm thư mục chứa `labels.tsv`
+`https://www.kaggle.com/api/v1/datasets/download/giamyy/msg-simulation-v2`. Sau đó giải nén, tìm thư mục chứa `labels.tsv`
 và `magma_outputs/magma_tree.hdf5`, chuyển vào `data/spec_datasets/msg_simulation/`, rồi xoá zip.
+
+Tiếp theo script chạy `scripts/check_msg_dataset.py`: số phổ, split, phổ trong `spec_files.hdf5`, cây MAGMa,
+`no_subform.hdf5`, `magma_subform_50.hdf5` (đọc toàn bộ) và bảng retrieval. Có lỗi thì dừng trước khi train. Kết quả ghi
+vào `logs/B0_check.log`. Kiểm tra chỉ chạy một lần cho mỗi bản dữ liệu (đánh dấu bằng `data/spec_datasets/msg_simulation/.check_ok`).
 
 ### B1. Train bộ sinh mảnh
 - **Script:** `src/ms_pred/marason/train_gen.py` (config `marason_train_msg.yaml`)

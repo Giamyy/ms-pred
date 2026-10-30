@@ -4,7 +4,7 @@ Nhờ anh/chị chạy giúp em quy trình train và đánh giá MARASON trên t
 Dữ liệu em đã dựng sẵn trên Kaggle, nên **không cần xử lý dữ liệu**. Script tự tải dữ liệu về, rồi train và đánh giá.
 
 - Code: https://github.com/Giamyy/ms-pred, nhánh `claude/code-explanation-frix3g` (fork của `coleygroup/ms-pred`)
-- Dữ liệu: https://www.kaggle.com/datasets/giamyy/msg-simulation
+- Dữ liệu: https://www.kaggle.com/datasets/giamyy/msg-simulation-v2
 
 ---
 
@@ -33,7 +33,8 @@ Kết quả đúng là dòng có `CUDA: True` kèm tên GPU.
 cd ~/ms-pred && source .venv/bin/activate
 python scripts/train_marason_msg.py --gpus 0 --max-epochs 2
 ```
-- Lần đầu, script tự tải dataset Kaggle `giamyy/msg-simulation` vào `data/spec_datasets/msg_simulation/`.
+- Lần đầu, script tự tải dataset Kaggle `giamyy/msg-simulation-v2` vào `data/spec_datasets/msg_simulation/`, rồi kiểm tra
+  dataset (`scripts/check_msg_dataset.py`); có lỗi thì dừng trước khi train.
 - Nếu báo `CUDA out of memory`: chạy lại với `--gen-batch 16 --inten-batch 8`.
 - Chạy thử xong thì xoá kết quả thử, **giữ lại** thư mục dữ liệu:
   ```bash
@@ -71,8 +72,9 @@ Script chạy lần lượt:
 
 | Bước | Việc | Ghi chú |
 |---|---|---|
-| B0 | Tải dữ liệu từ Kaggle | bỏ qua nếu đã có |
+| B0 | Tải dữ liệu từ Kaggle + kiểm tra dataset | tải bỏ qua nếu đã có; kiểm tra một lần |
 | B1 | Train bộ sinh mảnh | lâu |
+| S2 | Dò số mảnh (bước 2 của tác giả) | tự chạy vì dataset có `magma_subform_50.hdf5`; `--no-sweep` để bỏ |
 | B2 | Sinh DAG phân mảnh | |
 | B3 | Gắn phổ thật vào DAG | chỉ CPU |
 | B4 | Tính phổ tham chiếu + train bộ cường độ | lâu nhất |

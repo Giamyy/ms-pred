@@ -3,9 +3,11 @@
 
 Same steps as run_scripts/marason/run_all.sh (without MAGMA, which the dataset already has):
 
-    B0  download the dataset          Kaggle giamyy/msg-simulation (skipped if already in place)
+    B0  download + check the dataset  Kaggle giamyy/msg-simulation-v2 (download skipped if already in place),
+                                      then scripts/check_msg_dataset.py
     B1  train fragment generator      configs/marason/marason_train_msg.yaml
-    S2  sweep fragment counts         as run_scripts/marason/02_sweep_gen_thresh.py (optional: --sweep)
+    S2  sweep fragment counts         as run_scripts/marason/02_sweep_gen_thresh.py
+                                      (runs when subformulae/magma_subform_50.hdf5 is present)
     B2  predict DAGs                  configs/marason/marason_gen_predict_train_msg.yaml
     B3  add true intensities          data_scripts/dag/add_dag_intens.py
     B4  references + train intensity  configs/marason/marason_inten_train_msg.yaml
@@ -20,7 +22,7 @@ a .done_B* marker, so re-running the script resumes after the last finished step
     python scripts/train_marason_msg.py --steps B5 B6          # only some steps
     python scripts/train_marason_msg.py --gpus 0,1 --gen-batch 16
     python scripts/train_marason_msg.py --steps B4 --force     # redo a finished step
-    python scripts/train_marason_msg.py --sweep                # also run S2 (needs subformulae/magma_subform_50.hdf5)
+    python scripts/train_marason_msg.py --no-sweep             # skip S2 even if magma_subform_50.hdf5 is present
 """
 
 from __future__ import annotations
@@ -56,7 +58,8 @@ RUN = RES / "split_rnd1"
 REF_DIR = Path("data") / DATASET / "closest_neighbors/infinite"
 CFG_DIR = RES / "local_configs"
 LOG_DIR = RES / "logs"
-KAGGLE_DATASET = "giamyy/msg-simulation"           # https://www.kaggle.com/datasets/giamyy/msg-simulation
+KAGGLE_DATASET = "giamyy/msg-simulation-v2"        # https://www.kaggle.com/datasets/giamyy/msg-simulation-v2
+CHECK_MARKER = DATA / ".check_ok"
 REQUIRED = ["labels.tsv", "spec_files.hdf5", "splits/split.tsv",
             "magma_outputs/magma_tree.hdf5", "subformulae/no_subform.hdf5"]
 
@@ -73,9 +76,14 @@ def get_args():
     parser.add_argument("--retrieval-batch", type=int, default=10, help="B6 batch size (run_retrieval default 10)")
     parser.add_argument("--max-epochs", type=int, default=200,
                         help="B1/B4 epochs (config default 200; early stopping usually ends sooner)")
-    parser.add_argument("--steps", nargs="+", default=ALL_STEPS, choices=STEP_ORDER)
-    parser.add_argument("--sweep", action="store_true",
-                        help="also run S2, the fragment-count sweep (needs subformulae/magma_subform_50.hdf5)")
+    parser.add_argument("--steps", nargs="+", default=None, choices=STEP_ORDER,
+                        help="run only these steps (default: B1-B6, plus S2 when magma_subform_50.hdf5 is present)")
+    sweep = parser.add_mutually_exclusive_group()
+    sweep.add_argument("--sweep", dest="sweep", action="store_true", default=None,
+                       help="always run S2 (fails if magma_subform_50.hdf5 is missing; downloads it if needed)")
+    sweep.add_argument("--no-sweep", dest="sweep", action="store_false", help="never run S2")
+    parser.add_argument("--check", action="store_true", help="re-check the dataset even if it passed before")
+    parser.add_argument("--skip-check", action="store_true", help="do not check the dataset before training")
     parser.add_argument("--force", action="store_true", help="run the chosen steps even if already done")
     parser.add_argument("--kaggle-dataset", default=KAGGLE_DATASET,
                         help="Kaggle dataset <owner>/<name> to download when the data is missing")
@@ -338,7 +346,8 @@ def find_dataset_root(base: Path) -> Path | None:
 
 def prepare_data(args):
     """B0: make sure data/spec_datasets/msg_simulation is complete, downloading it from Kaggle if needed."""
-    missing = [f for f in REQUIRED if not (DATA / f).exists()]
+    required = REQUIRED + ([f"subformulae/{SUBFORM_50}"] if args.sweep else [])
+    missing = [f for f in required if not (DATA / f).exists()]
     if not missing:
         print(f"== B0: dữ liệu đã có trong {DATA}, không cần tải")
         return
@@ -377,17 +386,45 @@ def prepare_data(args):
     if not args.keep_download:
         zip_path.unlink(missing_ok=True)
 
-    missing = [f for f in REQUIRED if not (DATA / f).exists()]
+    CHECK_MARKER.unlink(missing_ok=True)       # new data: check it again
+    missing = [f for f in required if not (DATA / f).exists()]
     if missing:
-        raise RuntimeError(f"Dataset tải về thiếu {', '.join(missing)}")
+        raise RuntimeError(f"Dataset {args.kaggle_dataset} thiếu {', '.join(missing)}")
     print("Đã có:", ", ".join(sorted(p.name for p in DATA.iterdir())))
     print(f"== B0: xong sau {(time.time() - t0) / 60:.0f} phút", flush=True)
+
+
+def check_data(args):
+    """B0 (tiếp): run scripts/check_msg_dataset.py once per downloaded dataset; stop on errors."""
+    if args.skip_check:
+        print("== B0: bỏ qua kiểm tra dataset (--skip-check)")
+        return
+    if CHECK_MARKER.exists() and not args.check:
+        print(f"== B0: dataset đã kiểm tra trước đó ({CHECK_MARKER}); --check để kiểm tra lại")
+        return
+    print("== B0: kiểm tra dataset (scripts/check_msg_dataset.py)", flush=True)
+    CHECK_MARKER.unlink(missing_ok=True)       # only a passing check may leave the marker
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    import contextlib
+    import io
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check_msg_dataset  # scripts/check_msg_dataset.py
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        n_err = check_msg_dataset.main(DATA)
+    print(buf.getvalue(), end="")
+    (LOG_DIR / "B0_check.log").write_text(buf.getvalue())
+    if n_err:
+        raise RuntimeError(f"Dataset có {n_err} lỗi (xem các dòng [LỖI] ở trên và {LOG_DIR / 'B0_check.log'}); "
+                           "--skip-check để vẫn chạy")
+    CHECK_MARKER.touch()
 
 
 def main():
     args = get_args()
     os.chdir(REPO)
     prepare_data(args)
+    check_data(args)
     import torch
     if not torch.cuda.is_available():
         sys.exit("torch không thấy GPU (kiểm tra driver / môi trường: source .venv/bin/activate)")
@@ -396,7 +433,15 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
     print(f"GPU: {args.gpus} | workers: {args.num_workers} | batch gen/inten: {args.gen_batch}/{args.inten_batch}"
           f" | epochs: {args.max_epochs}")
-    steps = [s for s in STEP_ORDER if s in args.steps or (s == "S2" and args.sweep)]
+    has_sub50 = (DATA / "subformulae" / SUBFORM_50).exists()
+    if args.steps is None:
+        want = set(ALL_STEPS) | ({"S2"} if (args.sweep or (args.sweep is None and has_sub50)) else set())
+    else:
+        want = set(args.steps) | ({"S2"} if args.sweep else set())
+    steps = [s for s in STEP_ORDER if s in want]
+    if "S2" not in steps and args.steps is None and args.sweep is None:
+        print(f"Không có subformulae/{SUBFORM_50}: bỏ qua S2 (dò số mảnh). "
+              f"Dùng --sweep để tải bản dataset có file này ({args.kaggle_dataset})")
     print("Các bước:", " ".join(steps))
 
     runner = Runner(args)
