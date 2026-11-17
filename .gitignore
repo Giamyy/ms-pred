@@ -175,3 +175,8 @@ cython_debug/
 /data/spec_datasets/msg*/magma_outputs
 /data/spec_datasets/msg*/subformulae
 /data/spec_datasets/msg*/retrieval
+
+# Generated public datasets (data_scripts/public/build_public_datasets.sh)
+/data/spec_datasets/msnlib
+/data/spec_datasets/massbank
+/data/spec_datasets/nplib1

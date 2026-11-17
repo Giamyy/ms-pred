@@ -355,6 +355,44 @@ Replicating the retrieval metrics and CIs for the MassSpecGym spectrum challenge
 
 MARASON is trained in two parts: a learned fragment generator (the same as the one in ICEBERG) and an RAG-based intensity predictor. The pipeline for training and evaluating this model can be accessed in `run_scripts/marason/`. 
 There is an all-in-one script ``run_scripts/marason/run_all.sh`` that trains the up-to-date version of MARASON on NIST'20 and MassSpecGym dataset. 
+
+#### MARASON on public libraries (MSnLib, MassBank, NPLIB1)
+
+Three open libraries can be used without NIST or MassSpecGym:
+
+| Dataset | Source | Content after filtering (positive mode) |
+| --- | --- | --- |
+| `msnlib` | [MSnLib](https://zenodo.org/records/11163380) (Brungs et al., Nat. Methods 2025), `*_pos_ms2.mgf` of Zenodo record 21105617 | ~28.5k entries / 84k spectra, Orbitrap HCD, 2-4 collision energies per compound |
+| `massbank` | [MassBank EU](https://github.com/MassBank/MassBank-data/releases) `MassBank_NISTformat.msp`, release 2026.11 | ~10.3k entries / 50k spectra, Orbitrap, Orbitrap CID (IT-FT) and QTOF |
+| `nplib1` | [canopus_train_public](https://zenodo.org/records/8433354) (NPLIB1, GNPS subset) | 10.7k spectra, official `split_{1,2,3}.tsv` and 50-candidate retrieval tables |
+
+```shell
+workers=32 bash data_scripts/public/build_public_datasets.sh msnlib massbank nplib1
+bash run_scripts/marason/public/run_all.sh msnlib   # or massbank / nplib1
+```
+
+`build_public_datasets.sh` downloads the raw files to `data/raw/<dataset>`
+(`data_scripts/public/download_public_datasets.sh`, versions pinned at the top),
+converts them with `data_scripts/public/create_public_dataset.py`, then runs MAGMa
+(`data_scripts/dag/run_magma.sh`). Each `data/spec_datasets/<dataset>/audit.json`
+lists the counts and why spectra were dropped. Conversion details:
+
+* Entries follow the NIST20 layout: one spec per molecule, adduct and instrument, with one spectrum per collision energy.
+  MSnLib keeps only `SPECTYPE=SINGLE_BEST_SCAN` spectra that are not chimeric. MassBank keeps one entry per contributor.
+* All collision energies are converted to eV. NCE is converted as `NCE * precursor_mz / 500`.
+  For MassBank, values marked `%`, `NCE` or `(nominal)` are NCE, values marked `eV`/`V` are eV, and bare numbers are NCE on Orbitrap and eV otherwise.
+  Ramps and stepped or multiple energies are dropped.
+* NPLIB1 has no collision energies. By default, all MS2 blocks of a spectrum are merged into one spectrum labeled `nan`, as in the ICEBERG paper;
+  `--nplib1-ce keep` keeps the few annotated energies instead. Spectra without collision energy only use each other as MARASON references.
+* `msnlib` and `massbank` get an InChIKey-2D grouped 80/10/10 split (`splits/split_1.tsv`).
+
+`run_scripts/marason/public/run_all.sh` uses `configs/marason/public/*.yaml`
+(the MassSpecGym MARASON hyperparameters). It trains the generator, predicts
+fragmentation DAGs and the retrieval-augmented intensity model. References are
+saved to `data/spec_datasets/<dataset>/closest_neighbors/split_1`. It then reports
+spectrum similarity on the test fold, and for `nplib1` it also runs
+`run_scripts/marason/public/run_retrieval.py`.
+
 The internal pipeline used to conduct experiments can be followed below:
 
 1. *Train dag model*: `run_scripts/marason/01_run_marason_gen_train.sh`   
