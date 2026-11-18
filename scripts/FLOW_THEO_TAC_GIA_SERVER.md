@@ -17,77 +17,95 @@ MAGMa, gán subformula) và đi thẳng vào train.
 
 ---
 
-## 1. Lấy code gốc và cài môi trường bằng conda (server MedAI HPC, SLURM)
+## 1. Cài môi trường conda trên server MedAI HPC (SLURM)
 
-Quy định của server (https://hpc.medai.vn): head node chỉ để sửa file, `git`, `pip install` ngắn và nộp job; phiên SSH bị
-cắt sau 1 giờ; mọi tính toán phải chạy qua SLURM (`salloc`/`sbatch`). Conda lấy từ module `Miniforge3`, tạo môi trường
-bằng `-p` và **không chạy `conda init`**. Không dùng GPU RTX 5080 (labcom06): torch 2.6 không hỗ trợ card này.
+Những điều đã kiểm chứng trên server này:
+- Head node chỉ để sửa file và nộp job; phiên SSH bị cắt sau 1 giờ; tính toán phải chạy qua `salloc`/`sbatch`.
+- Không vào được `data.dgl.ai`, nên **không cài được DGL bằng pip/uv** như README (pip sẽ lặng lẽ lấy bản DGL trên PyPI,
+  thiếu `libgraphbolt_pytorch_2.6.0.so`). Vì vậy torch + DGL + PyG cài bằng **conda-forge** (torch 2.3.1, DGL 2.3.0).
+- Bản torch đó dùng numpy 1.x, nên phải giữ `numpy<2` và cài `ms_pred` với `--no-deps`.
+- Node tính toán không có `git` → cài `git` vào môi trường.
+- `pip` trơn có thể là pip của Miniforge chung (Python 3.12) → luôn gõ `python -m pip`.
+- Không chạy `conda init`; bật môi trường bằng `eval "$(conda shell.bash hook)"`.
 
-### 1.1. Đăng nhập (máy cá nhân đã cài và đăng nhập Tailscale)
+### 1.1. Đăng nhập rồi xin một node CPU
 ```bash
 ssh <username>@auth.medai.vn@labhhcmaster.greyhound-acoustic.ts.net
+salloc --cpus-per-task=8 --mem=32G --time=02:00:00
 ```
+Đợi dấu nhắc đổi sang `labcom0x` (nếu không đổi: `srun --pty bash`).
 
-### 1.2. Trên head node: lấy code và tạo môi trường rỗng
-```bash
-cd ~
-git clone https://github.com/coleygroup/ms-pred.git
-cd ~/ms-pred
-git log --oneline -1                               # ghi lại commit đã dùng
-
-module load Miniforge3
-conda create -y -p ~/envs/ms-pred python=3.11
-```
-
-### 1.3. Xem CUDA mà driver GPU hỗ trợ
-```bash
-srun --gres=gpu:nvidia_geforce_rtx_4090:1 --time=00:05:00 nvidia-smi
-```
-Ô `CUDA Version` ≥ 12.4 thì dùng `CU=cu124`; nếu chỉ 11.8–12.3 thì dùng `CU=cu118`.
-
-### 1.4. Cài thư viện trên node tính toán
-Cài torch/DGL và biên dịch phần Cython của `ms_pred` là việc nặng, nên chạy trong phiên `salloc` (Slurm đưa bạn vào
-shell trên node GPU):
-```bash
-salloc --cpus-per-task=8 --mem=32G --gres=gpu:nvidia_geforce_rtx_4090:1 --time=01:30:00
-```
-Khi đã vào node, chạy:
-```bash
-module purge
-module load Miniforge3 gnu15                       # gnu15 cung cấp gcc để biên dịch Cython
-source activate ~/envs/ms-pred                     # hoặc: eval "$(conda shell.bash hook)"; conda activate ~/envs/ms-pred
-cd ~/ms-pred
-
-CU=cu124                                           # theo kết quả bước 1.3
-pip install --upgrade pip
-pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/$CU
-pip install --no-index --no-deps dgl -f https://data.dgl.ai/wheels/torch-2.6/$CU/repo.html   # --no-index: bắt buộc lấy bản DGL cho torch 2.6, không lấy bản PyPI
-pip install dgl -f https://data.dgl.ai/wheels/torch-2.6/$CU/repo.html   # giữ bản DGL vừa cài, chỉ bổ sung thư viện phụ thuộc
-pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.6.0+$CU.html
-pip install torch-geometric
-pip install git+https://github.com/Thinklab-SJTU/pygmtools.git   # pyproject lấy pygmtools từ git
-pip install -e .                                   # cài ms_pred + các thư viện còn lại
-
-python -c "import torch, dgl; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.cuda.get_device_name(0))"
-exit                                               # trả lại GPU
-```
-Dòng `python -c` phải in `True`. Chạy trên head node thì luôn ra `False` (head node không có GPU), đó là bình thường.
-
-- `pip install torch` phải chạy **trước** `pip install -e .`, nếu không pip sẽ kéo bản torch mặc định từ PyPI, lệch CUDA
-  với wheel của DGL/PyG.
-- Nếu `import dgl` báo lỗi thư viện CUDA, kiểm tra `python -c "import torch; print(torch.version.cuda)"` có khớp `CU`.
-- Dọn cache cho đỡ tốn chỗ trong `$HOME`: `pip cache purge; conda clean --all -y`.
-
-### 1.5. Dùng môi trường về sau
-Trong mọi phiên `salloc` hoặc file `.sbatch`, mở đầu bằng:
+### 1.2. Nạp conda, chọn tên môi trường
 ```bash
 module purge
 module load Miniforge3 gnu15
-source activate ~/envs/ms-pred
-cd ~/ms-pred
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
+eval "$(conda shell.bash hook)"
+ENV=~/envs/ms-pred                 # đổi tên nếu muốn; thư mục này phải chưa tồn tại
 ```
-Không tự đặt `CUDA_VISIBLE_DEVICES` trong `.bashrc` hay file job; Slurm đã đặt sẵn theo GPU được cấp (luôn đánh số từ 0).
+
+### 1.3. Tạo môi trường (10–20 phút)
+```bash
+export CONDA_OVERRIDE_CUDA=12.4    # node đang đứng không có GPU; báo cho conda biết GPU hỗ trợ CUDA 12.4
+conda create -y -p $ENV -c conda-forge python=3.11 pip git setuptools wheel cython "numpy<2" \
+  "pytorch=*=cuda*" torchvision dgl pytorch_scatter pytorch_sparse pytorch_geometric
+```
+Xong khi thấy `Executing transaction: done`. Các dòng `WARNING ... Failed to explain problems` bỏ qua được.
+
+### 1.4. Bật môi trường và kiểm tra
+```bash
+conda activate $ENV
+export PYTHONNOUSERSITE=1          # không đọc gói trong ~/.local
+which python                       # phải là $ENV/bin/python
+python -m pip --version            # phải có "python 3.11"
+git --version
+```
+
+### 1.5. Lấy code
+```bash
+cd ~
+[ -d ms-pred ] || git clone https://github.com/coleygroup/ms-pred.git
+cd ~/ms-pred
+git status                         # phải là repo git
+git log --oneline -1               # ghi lại commit đã dùng
+```
+
+### 1.6. Cài các thư viện còn lại và ms-pred
+```bash
+python -m pip install "numpy<2" scikit-learn pathos cairosvg ipdb pubchempy omegaconf h5py matplotlib \
+  "rdkit==2025.03.*" ipykernel einops pytorch-lightning "ray[tune]>=2.49.1" seaborn platformdirs \
+  "torchdata<0.10" linsatnet msbuddy lightgbm git+https://github.com/Thinklab-SJTU/pygmtools.git
+python -m pip install --no-deps --no-build-isolation -e .
+```
+Nếu trong lúc chạy thấy `Downloading torch-...` thì dừng lại (Ctrl+C): pip đang kéo thêm một bản torch khác.
+
+### 1.7. Kiểm tra trên CPU rồi trả máy
+```bash
+python -c "import numpy, torch, dgl, torch_scatter, pygmtools, ms_pred; print('OK', numpy.__version__, torch.__version__, dgl.__version__)"
+exit
+```
+Mong đợi: `OK 1.26.x 2.3.1 2.3.0`.
+
+### 1.8. Kiểm tra GPU (chạy trên head node)
+```bash
+srun --gres=gpu:nvidia_geforce_rtx_3060:1 --time=00:05:00 ~/envs/ms-pred/bin/python -c \
+  "import torch, dgl; g=dgl.graph(([0],[1])).to('cuda'); print(torch.cuda.is_available(), torch.cuda.get_device_name(0), g.device)"
+```
+Mong đợi: `True NVIDIA GeForce RTX 3060 cuda:0`.
+
+### 1.9. Mở đầu mọi phiên `salloc` / file `.sbatch` về sau
+```bash
+module purge
+module load Miniforge3 gnu15
+eval "$(conda shell.bash hook)"
+conda activate ~/envs/ms-pred
+export PYTHONNOUSERSITE=1
+cd ~/ms-pred
+```
+- Môi trường nằm trong `$HOME` (ổ mạng dùng chung) nên dùng được trên mọi node.
+- Luôn xin GPU theo loại (`--gres=gpu:nvidia_geforce_rtx_4090:1`, `nvidia_a6000`, …), **không** dùng RTX 5080
+  (labcom06): torch 2.3.1 không hỗ trợ card này.
+- Không tự đặt `CUDA_VISIBLE_DEVICES`; Slurm đặt sẵn (luôn đánh số từ 0).
+- Xoá môi trường để cài lại: `rm -rf ~/envs/ms-pred`.
 
 ---
 
@@ -168,7 +186,7 @@ git diff --stat     # kiểm tra: 5 file thay đổi
 Chạy trong `tmux` để ngắt SSH không làm dừng job:
 ```bash
 tmux new -s marason
-cd ~/ms-pred && source activate ~/envs/ms-pred
+module load Miniforge3 gnu15 && eval "$(conda shell.bash hook)" && conda activate ~/envs/ms-pred && export PYTHONNOUSERSITE=1 && cd ~/ms-pred
 ```
 (`Ctrl+B` rồi `D` để thoát mà job vẫn chạy; `tmux attach -t marason` để xem lại.)
 
