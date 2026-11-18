@@ -2,7 +2,10 @@
 # Train and evaluate MARASON on a public dataset built by data_scripts/public/build_public_datasets.sh.
 #
 # Usage: bash run_scripts/marason/public/run_all.sh <msnlib|massbank|nplib1>
-# Env overrides: workers (CPU workers, default 32), CUDA_VISIBLE_DEVICES (default 0)
+# Env overrides: workers (CPU workers, default 32), CUDA_VISIBLE_DEVICES (default 0),
+#   MARASON_OVERRIDES: space-separated key=value pairs replacing values in configs/marason/public/*.yaml,
+#   e.g. MARASON_OVERRIDES="num-workers=4 num-cpu-workers=4 max-epochs=50 visible_devices=[0,1]".
+#   Patched copies are written to results/marason_<dataset>/configs/.
 #
 # Stages are skipped when their output already exists, so the script can be re-run after a failure.
 set -euo pipefail
@@ -16,18 +19,41 @@ res_dir=results/marason_$dataset/split_1_rnd1
 ref_dir=$data_dir/closest_neighbors/split_1
 config_dir=configs/marason/public
 
+config() {  # config <name>: path of the config to launch, with MARASON_OVERRIDES applied
+  local src=$config_dir/$1_$dataset.yaml
+  if [ -z "${MARASON_OVERRIDES:-}" ]; then echo "$src"; return; fi
+  local out=results/marason_$dataset/configs/$1_$dataset.yaml
+  mkdir -p "$(dirname "$out")"
+  python - "$src" "$out" $MARASON_OVERRIDES <<'EOF'
+import sys
+import yaml
+
+src, out, *overrides = sys.argv[1:]
+cfg = yaml.safe_load(open(src))
+for item in overrides:
+    key, val = item.split("=", 1)
+    val = yaml.safe_load(val)
+    if key in cfg["launcher_args"]:
+        cfg["launcher_args"][key] = val
+    elif key in cfg["universal_args"]:
+        cfg["universal_args"][key] = val if isinstance(val, list) else [val]
+yaml.safe_dump(cfg, open(out, "w"), sort_keys=False)
+EOF
+  echo "$out"
+}
+
 for f in labels.tsv spec_files.hdf5 splits/split_1.tsv magma_outputs subformulae/no_subform.hdf5; do
   [ -e "$data_dir/$f" ] || { echo "Missing $data_dir/$f; run data_scripts/public/build_public_datasets.sh $dataset first"; exit 1; }
 done
 
 # 1. Fragment generator (same as the ICEBERG generator)
 if [ ! -f "$res_dir/ckpt/gen/best.ckpt" ]; then
-  python launcher_scripts/run_from_config.py $config_dir/marason_train_$dataset.yaml
+  python launcher_scripts/run_from_config.py "$(config marason_train)"
 fi
 
 # 2. Predict fragmentation DAGs for every spectrum, then attach observed intensities
 if [ ! -f "$res_dir/preds_train_100/tree_preds.hdf5" ]; then
-  python launcher_scripts/run_from_config.py $config_dir/marason_gen_predict_train_$dataset.yaml
+  python launcher_scripts/run_from_config.py "$(config marason_gen_predict_train)"
 fi
 if [ ! -f "$res_dir/preds_train_100_inten.hdf5" ]; then
   python data_scripts/dag/add_dag_intens.py \
@@ -41,7 +67,7 @@ fi
 # 3. Retrieval-augmented intensity model; reference spectra are searched in the train fold and saved to $ref_dir
 mkdir -p "$ref_dir"
 if [ ! -f "$res_dir/ckpt/inten/best.ckpt" ]; then
-  python launcher_scripts/run_from_config.py $config_dir/marason_inten_train_$dataset.yaml
+  python launcher_scripts/run_from_config.py "$(config marason_inten_train)"
 fi
 
 # 4. Predict the test fold and report spectrum similarity (cosine, entropy, ...)

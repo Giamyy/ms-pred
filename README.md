@@ -391,7 +391,16 @@ lists the counts and why spectra were dropped. Conversion details:
 fragmentation DAGs and the retrieval-augmented intensity model. References are
 saved to `data/spec_datasets/<dataset>/closest_neighbors/split_1`. It then reports
 spectrum similarity on the test fold, and for `nplib1` it also runs
-`run_scripts/marason/public/run_retrieval.py`.
+`run_scripts/marason/public/run_retrieval.py`. Set `MARASON_OVERRIDES` to change
+config values without editing the files, e.g.
+`MARASON_OVERRIDES="num-workers=4 max-epochs=50" bash run_scripts/marason/public/run_all.sh nplib1`.
+
+**Kaggle:** open `notebooks/kaggle/marason_public_kaggle.ipynb` in Kaggle
+(GPU accelerator, Internet on), or from a notebook cell run
+`bash run_scripts/marason/public/kaggle_run.sh nplib1`. The script installs the
+environment into `/tmp`, uses all available CPUs and `MAX_EPOCHS` (default 50),
+and keeps data and results in `/kaggle/working`. Stages finished in an earlier
+session are restored with `RESUME_FROM=/kaggle/input/<notebook>/ms-pred`.
 
 The internal pipeline used to conduct experiments can be followed below:
 
