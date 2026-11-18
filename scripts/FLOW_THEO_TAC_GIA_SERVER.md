@@ -61,7 +61,7 @@ cd ~/ms-pred
 CU=cu124                                           # theo kết quả bước 1.3
 pip install --upgrade pip
 pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/$CU
-pip install dgl -f https://data.dgl.ai/wheels/torch-2.6/$CU/repo.html
+pip install --no-index --no-deps dgl -f https://data.dgl.ai/wheels/torch-2.6/$CU/repo.html   # --no-index: bắt buộc lấy bản DGL cho torch 2.6, không lấy bản PyPI
 pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.6.0+$CU.html
 pip install torch-geometric
 pip install git+https://github.com/Thinklab-SJTU/pygmtools.git   # pyproject lấy pygmtools từ git
