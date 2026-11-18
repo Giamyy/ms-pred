@@ -395,6 +395,11 @@ spectrum similarity on the test fold, and for `nplib1` it also runs
 config values without editing the files, e.g.
 `MARASON_OVERRIDES="num-workers=4 max-epochs=50" bash run_scripts/marason/public/run_all.sh nplib1`.
 
+**CPU only:** install with `uv sync --extra cpu`. `run_all.sh` detects that no
+GPU is available and runs every stage on CPU. This is much slower, so lower the
+epochs and match the workers to your cores, e.g.
+`MARASON_OVERRIDES="max-epochs=10 num-workers=8 num-cpu-workers=8" bash run_scripts/marason/public/run_all.sh nplib1`.
+
 **Kaggle:** open `notebooks/kaggle/marason_public_kaggle.ipynb` in Kaggle
 (GPU accelerator, Internet on), or from a notebook cell run
 `bash run_scripts/marason/public/kaggle_run.sh nplib1`. The script installs the

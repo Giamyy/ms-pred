@@ -42,6 +42,14 @@ EOF
   echo "$out"
 }
 
+# Without a GPU everything runs on CPU (much slower; lower max-epochs through MARASON_OVERRIDES)
+gpu_flag=--gpu
+if ! python -c "import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)"; then
+  echo "No GPU found: running MARASON on CPU"
+  gpu_flag=""
+  export MARASON_OVERRIDES="gpu=false visible_devices=null num-gpu-workers=0 ${MARASON_OVERRIDES:-}"
+fi
+
 for f in labels.tsv spec_files.hdf5 splits/split_1.tsv magma_outputs subformulae/no_subform.hdf5; do
   [ -e "$data_dir/$f" ] || { echo "Missing $data_dir/$f; run data_scripts/public/build_public_datasets.sh $dataset first"; exit 1; }
 done
@@ -78,7 +86,7 @@ python src/ms_pred/marason/predict_inten.py \
   --split-name split_1.tsv \
   --checkpoint-pth "$res_dir/ckpt/inten/best.ckpt" \
   --save-dir "$res_dir/preds" \
-  --gpu \
+  $gpu_flag \
   --num-workers 0 \
   --magma-dag-folder "$res_dir/preds_train_100/tree_preds.hdf5" \
   --inten-folder "$res_dir/preds_train_100_inten.hdf5" \
@@ -97,5 +105,5 @@ python analysis/spec_pred_eval.py \
 
 # 5. Retrieval among PubChem isomers (only nplib1 ships candidate tables)
 if [ -f "$data_dir/retrieval/cands_df_split_1_50.tsv" ]; then
-  python run_scripts/marason/public/run_retrieval.py --dataset "$dataset"
+  python run_scripts/marason/public/run_retrieval.py --dataset "$dataset" ${gpu_flag:+--gpu}
 fi

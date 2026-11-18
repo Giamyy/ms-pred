@@ -24,6 +24,7 @@ def get_args():
     parser.add_argument("--batch-size", default=8, type=int)
     parser.add_argument("--num-cpu-workers", default=10, type=int)
     parser.add_argument("--add-ref", action="store_true", help="Use retrieved reference spectra at prediction time.")
+    parser.add_argument("--gpu", action="store_true")
     return parser.parse_args()
 
 
@@ -63,10 +64,11 @@ def main():
     --num-gpu-workers 0 \\
     --magma-dag-folder {train_args["magma_dag_folder"]} \\
     --adduct-shift \\
-    --gpu \\
     --embed-elem-group \\
     --binned-out \\
     """
+    if args.gpu:
+        cmd += "--gpu "
     if args.add_ref:
         cmd += "--add-ref --max-ref-count 3 "
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": os.environ.get("CUDA_VISIBLE_DEVICES", "0")}
