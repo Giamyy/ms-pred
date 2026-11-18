@@ -71,7 +71,7 @@ git log --oneline -1               # ghi lại commit đã dùng
 
 ### 1.6. Cài các thư viện còn lại và ms-pred
 ```bash
-python -m pip install "numpy<2" scikit-learn pathos cairosvg ipdb pubchempy omegaconf h5py matplotlib \
+python -m pip install "numpy<2" "protobuf<5" scikit-learn pathos cairosvg ipdb pubchempy omegaconf h5py matplotlib \
   "rdkit==2025.03.*" ipykernel einops pytorch-lightning "ray[tune]>=2.49.1" seaborn platformdirs \
   "torchdata<0.10" linsatnet msbuddy lightgbm git+https://github.com/Thinklab-SJTU/pygmtools.git
 python -m pip install --no-deps --no-build-isolation -e .
