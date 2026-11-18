@@ -17,19 +17,41 @@ MAGMa, gán subformula) và đi thẳng vào train.
 
 ---
 
-## 1. Lấy code gốc và cài môi trường (README: *Install & setup*)
+## 1. Lấy code gốc và cài môi trường bằng conda
+
+README gốc cài bằng `uv` (`uv sync --extra cu124`). Ở đây dùng conda thay thế, cài đúng các phiên bản mà
+`pyproject.toml` khai báo (Python ≥ 3.10, `torch==2.6.0`, DGL/PyG bản cho torch 2.6, `rdkit==2025.03.*`).
+
 ```bash
 cd ~
 git clone https://github.com/coleygroup/ms-pred.git
 cd ~/ms-pred
 git log --oneline -1                               # ghi lại commit đã dùng
-curl -LsSf https://astral.sh/uv/install.sh | sh    # nếu chưa có uv
-source ~/.bashrc
-uv sync --extra cu124                              # CUDA 11.8 thì dùng --extra cu118
-source .venv/bin/activate
+
+# Nếu chưa có conda: cài Miniconda
+#   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+#   bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3 && ~/miniconda3/bin/conda init bash && source ~/.bashrc
+
+conda create -y -n ms-pred python=3.11
+conda activate ms-pred
+
+CU=cu124                                           # driver chỉ hỗ trợ CUDA 11.8 thì đặt CU=cu118
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/$CU
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.6/$CU/repo.html
+pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.6.0+$CU.html
+pip install torch-geometric
+pip install git+https://github.com/Thinklab-SJTU/pygmtools.git   # pyproject lấy pygmtools từ git
+pip install -e .                                   # cài ms_pred + các thư viện còn lại, biên dịch phần Cython (cần gcc)
+
 python -c "import torch, dgl; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
 ```
 Dòng cuối phải in `True`.
+
+- Cài đặt mất khoảng 10–15 phút. Các lần sau chỉ cần `conda activate ms-pred`.
+- Dòng `pip install torch` phải chạy **trước** `pip install -e .`, nếu không pip sẽ kéo bản torch mặc định từ PyPI
+  (có thể lệch CUDA và không khớp với wheel của DGL/PyG).
+- Nếu `import dgl` báo lỗi thiếu thư viện CUDA, kiểm tra lại `CU` có trùng với bản torch vừa cài không
+  (`python -c "import torch; print(torch.version.cuda)"`).
 
 ---
 
@@ -110,7 +132,7 @@ git diff --stat     # kiểm tra: 5 file thay đổi
 Chạy trong `tmux` để ngắt SSH không làm dừng job:
 ```bash
 tmux new -s marason
-cd ~/ms-pred && source .venv/bin/activate
+cd ~/ms-pred && conda activate ms-pred
 ```
 (`Ctrl+B` rồi `D` để thoát mà job vẫn chạy; `tmux attach -t marason` để xem lại.)
 
