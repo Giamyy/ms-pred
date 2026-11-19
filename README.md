@@ -124,78 +124,95 @@ Rename ``nist20`` with ``nist23`` if you are working with the newer version.
 
 ### MassSpecGym Data Processing
 
-We support two MassSpecGym processing settings for ICEBERG:
+The same builder supports three strategies using the public
+[MassSpecGym 1.5 TSV](https://huggingface.co/datasets/roman-bushuiev/MassSpecGym/tree/main/data):
 
-1. `msg_simulation`: the official MassSpecGym simulation-challenge subset.
-2. `msg_all`: a streamlined ICEBERG workflow for using all MassSpecGym entries
-   in the main retrieval benchmark.
+| Strategy | Spectra selected | Collision energy |
+| --- | --- | --- |
+| `msg_all` | All source entries | Keep observed values; missing values remain unknown |
+| `msg_known_ce` | Entries with known collision energy | Observed values only |
+| `msg_simulation` (default) | `simulation_challenge == True` and known collision energy | Observed values only |
 
-#### `msg_simulation`: Official Simulation-Challenge Subset
+Choose the strategy explicitly when reproducing an experiment. These strategies
+select different evaluation cohorts, so their retrieval scores are not directly
+comparable. The builder preserves the official `fold` assignments, source spectrum
+IDs, peak values, and available collision energies. It does not normalize collision
+energy units or impute missing values. Unknown energies in `msg_all` are represented
+as `['nan']` in labels and `>collision nan eV` in stored spectra; prepare/impute these
+before using a model that requires known collision energy. `msg_known_ce` is an
+initial training subset for that imputation workflow, not the simulation challenge.
 
-The `msg_simulation` dataset is the MassSpecGym simulation-challenge subset. It is generated from the public
-MassSpecGym 1.5 data on Hugging Face and keeps only rows with
-`simulation_challenge == True` and known collision energies.
+#### Build directly from Hugging Face
 
-First, make sure the base MassSpecGym dataset resources are available under
-`data/spec_datasets/msg`. At minimum, this directory should contain the spectrum
-HDF5 and the retrieval candidate tables you want to reuse:
-
-```text
-data/spec_datasets/msg/
-├── labels.tsv
-├── spec_files.hdf5
-└── retrieval/
-    ├── cands_df_test_formula_256.tsv
-    └── cands_df_test_mass_256.tsv
-```
-
-If you do not have `spec_files.hdf5`, build it from the public MassSpecGym table
-(one SIRIUS-style `.ms` string per spectrum, keyed by `{identifier}.ms`):
+No existing processed dataset is required. Run the desired command:
 
 ```shell
-python data_scripts/create_msg_spec_files.py \
-  --source-table https://huggingface.co/datasets/roman-bushuiev/MassSpecGym/resolve/main/data/MassSpecGym1.5.tsv \
-  --output data/spec_datasets/msg/spec_files.hdf5 \
-  --audit-out data/spec_datasets/msg/spec_files_audit.json
-```
-
-Spectra without a collision energy are stored under `>collision nan`; pass
-`--missing-ce skip` to drop them, or `--labels data/spec_datasets/msg/labels.tsv`
-to write only the spectra listed in a labels file.
-
-Then run:
-
-```shell
-python data_scripts/create_msg_simulation_dataset.py \
-  --source-table https://huggingface.co/datasets/roman-bushuiev/MassSpecGym/resolve/main/data/MassSpecGym1.5.tsv \
-  --source-dataset data/spec_datasets/msg \
-  --output-dataset data/spec_datasets/msg_simulation \
-  --force-output \
-  --overwrite \
+python data_scripts/create_msg_simulation_dataset.py --strategy msg_all \
+  --audit-out data/spec_datasets/msg_all/audit.json
+python data_scripts/create_msg_simulation_dataset.py --strategy msg_known_ce \
+  --audit-out data/spec_datasets/msg_known_ce/audit.json
+python data_scripts/create_msg_simulation_dataset.py --strategy msg_simulation \
   --audit-out data/spec_datasets/msg_simulation/audit.json
 ```
 
-The command writes `data/spec_datasets/msg_simulation/labels.tsv`,
-`data/spec_datasets/msg_simulation/splits/split.tsv`, filtered retrieval
-candidate tables, and small debug files for quick smoke checks. It also links or
-copies reusable resources from `data/spec_datasets/msg`, including
-`spec_files.hdf5`, `magma_outputs`, and `subformulae` when they are present.
+Each command writes `labels.tsv`, `spec_files.hdf5` (containing `.ms` text),
+`splits/split.tsv`, and small debug labels, spectra, and splits under
+`data/spec_datasets/<strategy>`. Use `--source-table /path/to/MassSpecGym1.5.tsv`
+to reuse a downloaded TSV or pin an exact source snapshot, and `--output-dataset`
+to choose a separate output directory. Existing generated files require
+`--overwrite` to replace. Check the audit's selected counts, split counts,
+`unknown_ce_rows`, `imputed_check`, and `pending_resources`; these base datasets
+still need MAGMA/subformula processing and retrieval candidate generation before
+training/retrieval workflows that require those resources. Empty debug candidate
+tables do not constitute a retrieval benchmark.
 
-After generation, check the audit:
+#### Reuse an existing processed dataset
+
+Supply `--source-dataset` to reuse its spectral HDF5 instead of converting TSV
+peaks. The selected labels and splits still come from `--source-table`. Available
+subformula annotations and candidate tables are filtered to the selected cohort;
+missing optional resources are listed in `pending_resources` instead of preventing
+base dataset creation. The source HDF5 must cover every selected spectrum.
 
 ```shell
-python - <<'PY'
-import json
-from pathlib import Path
-
-audit = json.loads(Path("data/spec_datasets/msg_simulation/audit.json").read_text())
-print(audit["output_rows"], audit["output_unique_specs"])
-print(audit["imputed_check"])
-PY
+python data_scripts/create_msg_simulation_dataset.py \
+  --strategy msg_simulation \
+  --source-dataset data/spec_datasets/msg_all \
+  --output-dataset data/spec_datasets/msg_simulation \
+  --audit-out data/spec_datasets/msg_simulation/audit.json
 ```
 
-For the current MassSpecGym 1.5 TSV, the expected output is 119,029 unique
-simulation-challenge spectra and zero imputed labels.
+The input and output directories must differ. The resulting spectral HDF5 is a
+relative symlink to the source HDF5, which may contain additional spectra; use
+`labels.tsv` and `splits/split.tsv` to define the selected cohort. Keep the source
+dataset available when moving or sharing such outputs. Explicit `--candidate-file`
+arguments require those files to exist. For the MassSpecGym 1.5 snapshot used in our
+simulation experiments, the expected selection was 119,029 unique spectra and zero
+imputed labels; verify counts for your pinned source version.
+
+#### All-in-one rebuild with MAGMa and retrieval candidates
+
+All MassSpecGym dataset folders can be regenerated from the public
+[Hugging Face release](https://huggingface.co/datasets/roman-bushuiev/MassSpecGym)
+with one command (downloads are cached in `data/raw/massspecgym`):
+
+```shell
+workers=32 bash data_scripts/build_msg_datasets.sh
+```
+
+This runs `data_scripts/create_msg_dataset.py` to write `labels.tsv`,
+`splits/split.tsv`, `spec_files.hdf5` and the official 256-candidate retrieval
+tables (`retrieval/cands_df_test_{formula,mass}_256.tsv`), and then builds:
+
+| Folder | Content |
+| --- | --- |
+| `msg_all` | all entries (missing collision energies as `['nan']`), plus `magma_outputs` and `subformulae/no_subform.hdf5` from `data_scripts/dag/run_magma.sh` |
+| `msg_known_ce` | entries with known collision energies, sharing `msg_all` resources |
+| `msg` | simulation-challenge entries with known collision energies, sharing `msg_all` resources |
+| `msg_simulation` | built from `msg` by `create_msg_simulation_dataset.py` (below) |
+
+MAGMa annotation is the slow step; set `skip_magma=1` to skip it if
+`msg_all/magma_outputs` and `msg_all/subformulae` already exist.
 
 #### `msg_all`: Full MassSpecGym ICEBERG Workflow
 
@@ -338,6 +355,58 @@ Replicating the retrieval metrics and CIs for the MassSpecGym spectrum challenge
 
 MARASON is trained in two parts: a learned fragment generator (the same as the one in ICEBERG) and an RAG-based intensity predictor. The pipeline for training and evaluating this model can be accessed in `run_scripts/marason/`. 
 There is an all-in-one script ``run_scripts/marason/run_all.sh`` that trains the up-to-date version of MARASON on NIST'20 and MassSpecGym dataset. 
+
+#### MARASON on public libraries (MSnLib, MassBank, NPLIB1)
+
+Three open libraries can be used without NIST or MassSpecGym:
+
+| Dataset | Source | Content after filtering (positive mode) |
+| --- | --- | --- |
+| `msnlib` | [MSnLib](https://zenodo.org/records/11163380) (Brungs et al., Nat. Methods 2025), `*_pos_ms2.mgf` of Zenodo record 21105617 | ~28.5k entries / 84k spectra, Orbitrap HCD, 2-4 collision energies per compound |
+| `massbank` | [MassBank EU](https://github.com/MassBank/MassBank-data/releases) `MassBank_NISTformat.msp`, release 2026.11 | ~10.3k entries / 50k spectra, Orbitrap, Orbitrap CID (IT-FT) and QTOF |
+| `nplib1` | [canopus_train_public](https://zenodo.org/records/8433354) (NPLIB1, GNPS subset) | 10.7k spectra, official `split_{1,2,3}.tsv` and 50-candidate retrieval tables |
+
+```shell
+workers=32 bash data_scripts/public/build_public_datasets.sh msnlib massbank nplib1
+bash run_scripts/marason/public/run_all.sh msnlib   # or massbank / nplib1
+```
+
+`build_public_datasets.sh` downloads the raw files to `data/raw/<dataset>`
+(`data_scripts/public/download_public_datasets.sh`, versions pinned at the top),
+converts them with `data_scripts/public/create_public_dataset.py`, then runs MAGMa
+(`data_scripts/dag/run_magma.sh`). Each `data/spec_datasets/<dataset>/audit.json`
+lists the counts and why spectra were dropped. Conversion details:
+
+* Entries follow the NIST20 layout: one spec per molecule, adduct and instrument, with one spectrum per collision energy.
+  MSnLib keeps only `SPECTYPE=SINGLE_BEST_SCAN` spectra that are not chimeric. MassBank keeps one entry per contributor.
+* All collision energies are converted to eV. NCE is converted as `NCE * precursor_mz / 500`.
+  For MassBank, values marked `%`, `NCE` or `(nominal)` are NCE, values marked `eV`/`V` are eV, and bare numbers are NCE on Orbitrap and eV otherwise.
+  Ramps and stepped or multiple energies are dropped.
+* NPLIB1 has no collision energies. By default, all MS2 blocks of a spectrum are merged into one spectrum labeled `nan`, as in the ICEBERG paper;
+  `--nplib1-ce keep` keeps the few annotated energies instead. Spectra without collision energy only use each other as MARASON references.
+* `msnlib` and `massbank` get an InChIKey-2D grouped 80/10/10 split (`splits/split_1.tsv`).
+
+`run_scripts/marason/public/run_all.sh` uses `configs/marason/public/*.yaml`
+(the MassSpecGym MARASON hyperparameters). It trains the generator, predicts
+fragmentation DAGs and the retrieval-augmented intensity model. References are
+saved to `data/spec_datasets/<dataset>/closest_neighbors/split_1`. It then reports
+spectrum similarity on the test fold, and for `nplib1` it also runs
+`run_scripts/marason/public/run_retrieval.py`. Set `MARASON_OVERRIDES` to change
+config values without editing the files, e.g.
+`MARASON_OVERRIDES="num-workers=4 max-epochs=50" bash run_scripts/marason/public/run_all.sh nplib1`.
+
+**CPU only:** install with `uv sync --extra cpu`. `run_all.sh` detects that no
+GPU is available and runs every stage on CPU. This is much slower, so lower the
+epochs and match the workers to your cores, e.g.
+`MARASON_OVERRIDES="max-epochs=10 num-workers=8 num-cpu-workers=8" bash run_scripts/marason/public/run_all.sh nplib1`.
+
+**Kaggle:** open `notebooks/kaggle/marason_public_kaggle.ipynb` in Kaggle
+(GPU accelerator, Internet on), or from a notebook cell run
+`bash run_scripts/marason/public/kaggle_run.sh nplib1`. The script installs the
+environment into `/tmp`, uses all available CPUs and `MAX_EPOCHS` (default 50),
+and keeps data and results in `/kaggle/working`. Stages finished in an earlier
+session are restored with `RESUME_FROM=/kaggle/input/<notebook>/ms-pred`.
+
 The internal pipeline used to conduct experiments can be followed below:
 
 1. *Train dag model*: `run_scripts/marason/01_run_marason_gen_train.sh`   

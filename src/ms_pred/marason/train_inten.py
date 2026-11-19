@@ -321,6 +321,8 @@ def train_model():
                 distance = np.where(data_adducts == adduct, np.where(np.isclose(train_distance, 0), 1, train_distance), 1)
                 distance = np.where(db_instruments == instrument, distance, 1)
                 diffs = np.abs(db_engs - collision_eng)
+                # spectra without collision energy (nan, e.g. NPLIB1) can only reference each other
+                diffs = np.where(np.isnan(db_engs) & np.isnan(collision_eng), 0, np.nan_to_num(diffs, nan=np.inf))
                 distance = np.where(diffs < eng_threshold, distance, 1)
 
                 ranks = np.lexsort((diffs, distance))
@@ -618,8 +620,8 @@ def train_model():
     trainer = pl.Trainer(
         logger=[tb_logger, console_logger],
         accelerator="gpu" if kwargs["gpu"] else "cpu",
-        strategy='ddp',
-        devices=torch.cuda.device_count() if kwargs["gpu"] else 0,
+        strategy='ddp' if kwargs["gpu"] else "auto",
+        devices=torch.cuda.device_count() if kwargs["gpu"] else 1,  # Lightning 2.x rejects devices=0 on CPU
         callbacks=callbacks,
         gradient_clip_val=5,
         min_epochs=kwargs["min_epochs"],
